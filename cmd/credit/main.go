@@ -1,11 +1,14 @@
 /*
 Copyright © 2023 NAME HERE <EMAIL ADDRESS>
-
 */
 package main
 
-import "github.com/ffalor/credit/cmd"
+import (
+	"os"
+
+	"github.com/ffalor/credit/pkg/cli"
+)
 
 func main() {
-	cmd.Execute()
+	os.Exit(int(cli.Run()))
 }
