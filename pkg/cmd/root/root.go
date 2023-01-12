@@ -8,6 +8,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -25,13 +26,17 @@ type RootOptions struct {
 type Issue struct {
 	Body   string
 	Title  string
+	Url    string
 	Closed bool
+	Labels []string
 }
 
 type MergedPr struct {
 	Title        string
-	CreatedAt    githubv4.DateTime
-	MergedAt     githubv4.DateTime
+	Body         string
+	Url          string
+	CreatedAt    string
+	MergedAt     string
 	ClosedIssues []Issue
 }
 
@@ -44,14 +49,22 @@ type Query struct {
 		Edges []struct {
 			Node struct {
 				PullRequest struct {
-					Title                   githubv4.String
-					CreatedAt               githubv4.DateTime
-					MergedAt                githubv4.DateTime
+					Title                   string
+					Body                    string
+					CreatedAt               string
+					MergedAt                string
+					Url                     string
 					ClosingIssuesReferences struct {
 						Nodes []struct {
-							Body   githubv4.String
-							Closed githubv4.Boolean
-							Title  githubv4.String
+							Body   string
+							Title  string
+							Url    string
+							Closed bool
+							Labels struct {
+								Nodes []struct {
+									Name string
+								}
+							} `graphql:"labels(first: 10)"`
 						}
 					} `graphql:"closingIssuesReferences(first: 100)"`
 				} `graphql:"... on PullRequest"`
@@ -65,7 +78,7 @@ func NewCmdRoot() *cobra.Command {
 	opts := &RootOptions{}
 
 	cmd := &cobra.Command{
-		Use:     "credit [from]",
+		Use:     "credit [user] -f <YYYY-MM-DD>",
 		Short:   "Export all github issues into a csv file for Jira import",
 		Long:    "Export all github issues from a start date into a csv file for Jira import.",
 		Example: "$ credit ffalor -f 2020-01-01",
@@ -134,15 +147,25 @@ func runRoot(opts *RootOptions) error {
 			var closedIssues []Issue
 
 			for _, issue := range node.ClosingIssuesReferences.Nodes {
+
+				var labels []string
+
+				for _, label := range issue.Labels.Nodes {
+					labels = append(labels, label.Name)
+				}
+
 				closedIssues = append(closedIssues, Issue{
-					Body:   string(issue.Body),
-					Closed: bool(issue.Closed),
-					Title:  string(issue.Title),
+					Body:   issue.Body,
+					Closed: issue.Closed,
+					Title:  issue.Title,
+					Labels: labels,
 				})
 			}
 
 			allMergedPrs = append(allMergedPrs, MergedPr{
-				Title:        string(node.Title),
+				Title:        node.Title,
+				Body:         node.Body,
+				Url:          node.Url,
 				CreatedAt:    node.CreatedAt,
 				MergedAt:     node.MergedAt,
 				ClosedIssues: closedIssues,
@@ -166,13 +189,19 @@ func runRoot(opts *RootOptions) error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	writer.Write([]string{"title", "description", "type"})
+	writer.Write([]string{"title", "description", "assignee", "type"})
 
 	for _, pr := range allMergedPrs {
-		writer.Write([]string{pr.Title, "", "pr"})
+		body := fmt.Sprintf("%s\nURL: %s", pr.Body, pr.Url)
+		writer.Write([]string{pr.Title, body, opts.User, "pr"})
 
 		for _, issue := range pr.ClosedIssues {
-			writer.Write([]string{issue.Title, issue.Body, "issue"})
+			body := fmt.Sprintf("%s\nURL: %s", issue.Body, issue.Url)
+			if len(issue.Labels) > 0 {
+				body = fmt.Sprintf("%s\nLabels: %s", body, strings.Join(issue.Labels, ", "))
+			}
+
+			writer.Write([]string{issue.Title, body, opts.User, "issue"})
 		}
 	}
 
