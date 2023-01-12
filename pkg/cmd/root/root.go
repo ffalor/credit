@@ -24,27 +24,26 @@ type RootOptions struct {
 }
 
 type Issue struct {
+	Id     string
 	Body   string
 	Title  string
 	Url    string
-	Closed bool
 	Labels []string
 }
 
 type MergedPr struct {
-	Title        string
-	Body         string
-	Url          string
-	CreatedAt    string
-	MergedAt     string
-	ClosedIssues []Issue
+	Title     string
+	Body      string
+	Url       string
+	CreatedAt string
+	MergedAt  string
 }
 
-type Query struct {
+type MergedPrQuery struct {
 	Search struct {
 		PageInfo struct {
-			EndCursor   githubv4.String
-			HasNextPage githubv4.Boolean
+			EndCursor   string
+			HasNextPage bool
 		}
 		Edges []struct {
 			Node struct {
@@ -56,10 +55,10 @@ type Query struct {
 					Url                     string
 					ClosingIssuesReferences struct {
 						Nodes []struct {
+							Id     string
 							Body   string
 							Title  string
 							Url    string
-							Closed bool
 							Labels struct {
 								Nodes []struct {
 									Name string
@@ -69,6 +68,28 @@ type Query struct {
 					} `graphql:"closingIssuesReferences(first: 100)"`
 				} `graphql:"... on PullRequest"`
 			}
+		}
+	} `graphql:"search(query: $query, type: ISSUE, first: 100, after: $searchCursor)"`
+}
+
+type IssueQuery struct {
+	Search struct {
+		PageInfo struct {
+			EndCursor   string
+			HasNextPage bool
+		}
+		Nodes []struct {
+			Issue struct {
+				Id     string
+				Title  string
+				Body   string
+				Url    string
+				Labels struct {
+					Nodes []struct {
+						Name string
+					}
+				} `graphql:"labels(first: 10)"`
+			} `graphql:"... on Issue"`
 		}
 	} `graphql:"search(query: $query, type: ISSUE, first: 100, after: $searchCursor)"`
 }
@@ -128,14 +149,16 @@ func NewCmdRoot() *cobra.Command {
 
 func runRoot(opts *RootOptions) error {
 
-	variables := map[string]interface{}{
-		"query":        githubv4.String(fmt.Sprintf("is:pr is:merged author:%s merged:>%s", opts.User, opts.FromDate)),
-		"searchCursor": (*githubv4.String)(nil),
-	}
-
 	var allMergedPrs []MergedPr
+	allIssues := make(map[string]Issue)
+
 	for {
-		var query Query
+		variables := map[string]interface{}{
+			"query":        githubv4.String(fmt.Sprintf("is:pr is:merged author:%s merged:>%s", opts.User, opts.FromDate)),
+			"searchCursor": (*githubv4.String)(nil),
+		}
+
+		var query MergedPrQuery
 
 		err := opts.Client.Query(context.Background(), &query, variables)
 		if err != nil {
@@ -144,7 +167,6 @@ func runRoot(opts *RootOptions) error {
 
 		for _, edge := range query.Search.Edges {
 			node := edge.Node.PullRequest
-			var closedIssues []Issue
 
 			for _, issue := range node.ClosingIssuesReferences.Nodes {
 
@@ -154,29 +176,64 @@ func runRoot(opts *RootOptions) error {
 					labels = append(labels, label.Name)
 				}
 
-				closedIssues = append(closedIssues, Issue{
+				allIssues[issue.Id] = Issue{
+					Id:     issue.Id,
 					Body:   issue.Body,
-					Closed: issue.Closed,
 					Title:  issue.Title,
 					Labels: labels,
-				})
+				}
 			}
 
 			allMergedPrs = append(allMergedPrs, MergedPr{
-				Title:        node.Title,
-				Body:         node.Body,
-				Url:          node.Url,
-				CreatedAt:    node.CreatedAt,
-				MergedAt:     node.MergedAt,
-				ClosedIssues: closedIssues,
+				Title:     node.Title,
+				Body:      node.Body,
+				Url:       node.Url,
+				CreatedAt: node.CreatedAt,
+				MergedAt:  node.MergedAt,
 			})
 		}
 
-		if !bool(query.Search.PageInfo.HasNextPage) {
+		if !query.Search.PageInfo.HasNextPage {
 			break
 		}
 
-		variables["searchCursor"] = githubv4.NewString(query.Search.PageInfo.EndCursor)
+		variables["searchCursor"] = query.Search.PageInfo.EndCursor
+	}
+
+	for {
+		variables := map[string]interface{}{
+			"query":        githubv4.String(fmt.Sprintf("is:issue is:closed author:%s closed:>%s", opts.User, opts.FromDate)),
+			"searchCursor": (*githubv4.String)(nil),
+		}
+		var query IssueQuery
+
+		err := opts.Client.Query(context.Background(), &query, variables)
+		if err != nil {
+			return err
+		}
+
+		for _, node := range query.Search.Nodes {
+			issue := node.Issue
+
+			var labels []string
+
+			for _, label := range issue.Labels.Nodes {
+				labels = append(labels, label.Name)
+			}
+
+			allIssues[issue.Id] = Issue{
+				Id:     issue.Id,
+				Body:   issue.Body,
+				Title:  issue.Title,
+				Labels: labels,
+			}
+		}
+
+		if !query.Search.PageInfo.HasNextPage {
+			break
+		}
+
+		variables["searchCursor"] = query.Search.PageInfo.EndCursor
 	}
 
 	file, err := os.Create("issues.csv")
@@ -194,15 +251,15 @@ func runRoot(opts *RootOptions) error {
 	for _, pr := range allMergedPrs {
 		body := fmt.Sprintf("%s\nURL: %s", pr.Body, pr.Url)
 		writer.Write([]string{pr.Title, body, opts.User, "pr"})
+	}
 
-		for _, issue := range pr.ClosedIssues {
-			body := fmt.Sprintf("%s\nURL: %s", issue.Body, issue.Url)
-			if len(issue.Labels) > 0 {
-				body = fmt.Sprintf("%s\nLabels: %s", body, strings.Join(issue.Labels, ", "))
-			}
-
-			writer.Write([]string{issue.Title, body, opts.User, "issue"})
+	for _, issue := range allIssues {
+		body := fmt.Sprintf("%s\nURL: %s", issue.Body, issue.Url)
+		if len(issue.Labels) > 0 {
+			body = fmt.Sprintf("%s\nLabels: %s", body, strings.Join(issue.Labels, ", "))
 		}
+
+		writer.Write([]string{issue.Title, body, opts.User, "issue"})
 	}
 
 	return nil
