@@ -1,18 +1,23 @@
 package types
 
 type Issue struct {
-	Id     string
-	Body   string
-	Title  string
-	Url    string
-	Labels []string
+	Id       string
+	RepoName string
+	Body     string
+	Title    string
+	Url      string
+	Epic     string
+	Labels   []string
 }
 
 type MergedPr struct {
+	Id        string
+	RepoName  string
 	Title     string
 	Body      string
 	Url       string
 	CreatedAt string
+	Epic      string
 	MergedAt  string
 }
 
@@ -25,6 +30,7 @@ type MergedPrQuery struct {
 		Edges []struct {
 			Node struct {
 				PullRequest struct {
+					Id                      string
 					Title                   string
 					Body                    string
 					CreatedAt               string
@@ -43,6 +49,9 @@ type MergedPrQuery struct {
 							} `graphql:"labels(first: 10)"`
 						}
 					} `graphql:"closingIssuesReferences(first: 100)"`
+					BaseRepository struct {
+						Name string
+					} `graphql:"baseRepository"`
 				} `graphql:"... on PullRequest"`
 			}
 		}
@@ -66,6 +75,9 @@ type IssueQuery struct {
 						Name string
 					}
 				} `graphql:"labels(first: 10)"`
+				Repository struct {
+					Name string
+				} `graphql:"repository"`
 			} `graphql:"... on Issue"`
 		}
 	} `graphql:"search(query: $query, type: ISSUE, first: 100, after: $searchCursor)"`

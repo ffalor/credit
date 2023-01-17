@@ -28,8 +28,8 @@ func NewGh(token string) *Gh {
 }
 
 // GetIssues returns all merged PRs and closed issues for a given user
-func (g *Gh) GetIssues(user string, fromDate string) ([]types.MergedPr, map[string]types.Issue, error) {
-	var allMergedPrs []types.MergedPr
+func (g *Gh) GetIssues(user string, fromDate string) (map[string]types.MergedPr, map[string]types.Issue, error) {
+	allMergedPrs := make(map[string]types.MergedPr)
 	allIssues := make(map[string]types.Issue)
 
 	for {
@@ -57,20 +57,24 @@ func (g *Gh) GetIssues(user string, fromDate string) ([]types.MergedPr, map[stri
 				}
 
 				allIssues[issue.Id] = types.Issue{
-					Id:     issue.Id,
-					Body:   issue.Body,
-					Title:  issue.Title,
-					Labels: labels,
+					Id:       issue.Id,
+					RepoName: node.BaseRepository.Name,
+					Body:     issue.Body,
+					Url:      issue.Url,
+					Title:    issue.Title,
+					Labels:   labels,
 				}
 			}
 
-			allMergedPrs = append(allMergedPrs, types.MergedPr{
+			allMergedPrs[node.Id] = types.MergedPr{
+				Id:        node.Id,
+				RepoName:  node.BaseRepository.Name,
 				Title:     node.Title,
 				Body:      node.Body,
 				Url:       node.Url,
 				CreatedAt: node.CreatedAt,
 				MergedAt:  node.MergedAt,
-			})
+			}
 		}
 
 		if !query.Search.PageInfo.HasNextPage {

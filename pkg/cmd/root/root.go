@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/ffalor/credit/pkg/util/csvwriter"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ffalor/credit/pkg/util/gh"
+	"github.com/ffalor/credit/pkg/util/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -79,9 +80,20 @@ func runRoot(opts *RootOptions) error {
 		return err
 	}
 
-	// Write to csv file issues.csv
-	csvwriter := csvwriter.NewWriter()
-	csvwriter.Write(opts.User, allMergedPrs, allIssues)
+	// // Write to csv file issues.csv
+	// csvwriter := csvwriter.NewWriter()
+	// csvwriter.Write(opts.User, allMergedPrs, allIssues)
+
+	model, err := tui.InitialModel(allMergedPrs, allIssues)
+	if err != nil {
+		return err
+	}
+
+	p := tea.NewProgram(model)
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Alas, there's been an error: %v", err)
+		os.Exit(1)
+	}
 
 	return nil
 }
