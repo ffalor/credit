@@ -15,7 +15,7 @@ func NewWriter() *Writer {
 	return &Writer{}
 }
 
-func (w *Writer) Write(user string, allMergedPrs []types.MergedPr, allIssues map[string]types.Issue) error {
+func (w *Writer) Write(user string, allMergedPrs map[string]types.MergedPr, allIssues map[string]types.Issue) error {
 	file, err := os.Create("issues.csv")
 	defer file.Close()
 
@@ -26,11 +26,11 @@ func (w *Writer) Write(user string, allMergedPrs []types.MergedPr, allIssues map
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	writer.Write([]string{"title", "description", "assignee", "type"})
+	writer.Write([]string{"title", "description", "assignee", "repo", "type"})
 
 	for _, pr := range allMergedPrs {
 		body := fmt.Sprintf("%s\nURL: %s", pr.Body, pr.Url)
-		writer.Write([]string{pr.Title, body, user, "pr"})
+		writer.Write([]string{pr.Title, body, user, pr.RepoName, "pr"})
 	}
 
 	for _, issue := range allIssues {
@@ -39,7 +39,7 @@ func (w *Writer) Write(user string, allMergedPrs []types.MergedPr, allIssues map
 			body = fmt.Sprintf("%s\nLabels: %s", body, strings.Join(issue.Labels, ", "))
 		}
 
-		writer.Write([]string{issue.Title, body, user, "issue"})
+		writer.Write([]string{issue.Title, body, user, issue.RepoName, "issue"})
 	}
 
 	return nil

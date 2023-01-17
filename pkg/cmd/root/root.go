@@ -10,6 +10,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ffalor/credit/pkg/util/csvwriter"
 	"github.com/ffalor/credit/pkg/util/gh"
 	"github.com/ffalor/credit/pkg/util/tui"
 	"github.com/spf13/cobra"
@@ -81,8 +82,8 @@ func runRoot(opts *RootOptions) error {
 	}
 
 	// // Write to csv file issues.csv
-	// csvwriter := csvwriter.NewWriter()
-	// csvwriter.Write(opts.User, allMergedPrs, allIssues)
+	csvwriter := csvwriter.NewWriter()
+	csvwriter.Write(opts.User, allMergedPrs, allIssues)
 
 	model, err := tui.InitialModel(allMergedPrs, allIssues)
 	if err != nil {

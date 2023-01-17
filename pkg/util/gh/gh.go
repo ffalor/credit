@@ -47,7 +47,6 @@ func (g *Gh) GetIssues(user string, fromDate string) (map[string]types.MergedPr,
 
 		for _, edge := range query.Search.Edges {
 			node := edge.Node.PullRequest
-
 			for _, issue := range node.ClosingIssuesReferences.Nodes {
 
 				var labels []string
@@ -98,7 +97,6 @@ func (g *Gh) GetIssues(user string, fromDate string) (map[string]types.MergedPr,
 
 		for _, node := range query.Search.Nodes {
 			issue := node.Issue
-
 			var labels []string
 
 			for _, label := range issue.Labels.Nodes {

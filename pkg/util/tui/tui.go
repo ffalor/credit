@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ffalor/credit/pkg/util/types"
+	"github.com/muesli/reflow/truncate"
 )
 
 // keyMap is used to track key bindings
@@ -138,6 +139,11 @@ func (d issueItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 }
 func (d issueItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
 	chosen := " "
+	var issueSummary string
+
+	if m.Width() <= 0 {
+		return
+	}
 
 	i, ok := listItem.(issueItem)
 	if !ok {
@@ -148,12 +154,15 @@ func (d issueItemDelegate) Render(w io.Writer, m list.Model, index int, listItem
 		chosen = "✓"
 	}
 
-	str := fmt.Sprintf("%s %s", chosenItemStyle.Render(chosen), i.summary)
+	textwidth := uint(m.Width() - normalItem.GetPaddingLeft() - normalItem.GetPaddingRight())
+	issueSummary = truncate.StringWithTail(i.summary, textwidth, "…")
 
-	fn := itemStyle.Render
+	str := fmt.Sprintf("%s %s", selectedItemStyle.Render(chosen), issueSummary)
+
+	fn := normalItem.Render
 	if index == m.Index() {
 		fn = func(s string) string {
-			return selectedItemStyle.Render("> " + s)
+			return focusedItemStyle.Render("> " + s)
 		}
 	}
 
@@ -163,20 +172,20 @@ func (d issueItemDelegate) Render(w io.Writer, m list.Model, index int, listItem
 var docStyle = lipgloss.NewStyle().Margin(1, 2)
 
 type model struct {
-	keys                  keyMap
-	help                  help.Model
-	inputStyle            lipgloss.Style
-	lastKey               string
-	quitting              bool
-	selected              map[string]struct{}
-	issues                map[string]types.Issue
-	mergedPrs             map[string]types.MergedPr
-	epic                  string
-	issueSummaryInput     textinput.Model
-	issueDescriptionInput textarea.Model
-	issueList             list.Model // left side list of issues
-	focusedView           sessionState
-	mainFlexBox           *stickers.FlexBox // main flexbox includes issue list and issue editor
+	keys               keyMap
+	help               help.Model
+	lastKey            string
+	quitting           bool
+	selected           map[string]struct{}
+	issues             map[string]types.Issue
+	mergedPrs          map[string]types.MergedPr
+	epic               string
+	issueRepoName      string
+	issueSummaryTi     textinput.Model
+	issueDescriptionTa textarea.Model
+	issueList          list.Model // left side list of issues
+	focusedView        sessionState
+	mainFlexBox        *stickers.FlexBox // main flexbox includes issue list and issue editor
 }
 
 func InitialModel(mergedPrs map[string]types.MergedPr, issues map[string]types.Issue) (model, error) {
@@ -204,10 +213,11 @@ func InitialModel(mergedPrs map[string]types.MergedPr, issues map[string]types.I
 	l := list.New(choices, issueItemDelegate{}, defaultWidth, defaultWidth)
 	l.Title = "Unassigned Issues"
 	l.Styles.PaginationStyle = paginationStyle
-	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(false)
 	l.Styles.Title = titleStyle
+	l.Styles.StatusBar = statusBarStyle
 	l.DisableQuitKeybindings()
+	l.SetShowHelp(true)
+	l.SetStatusBarItemName("issue left", "issues left")
 	l.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			keys.Enter,
@@ -224,14 +234,15 @@ func InitialModel(mergedPrs map[string]types.MergedPr, issues map[string]types.I
 	}
 
 	issueSummaryInput := textinput.New()
+	issueSummaryInput.PromptStyle.BorderStyle(lipgloss.ThickBorder())
 	issueSummaryInput.Placeholder = "Issue Summary"
 	issueSummaryInput.Prompt = "Issue Summary: "
-	issueSummaryInput.PromptStyle.BorderStyle(lipgloss.NormalBorder())
 	issueSummaryInput.SetValue(selectedItem.summary)
 
 	issueDescriptionInput := textarea.New()
 	issueDescriptionInput.Placeholder = "Issue Description"
 	issueDescriptionInput.ShowLineNumbers = false
+	issueDescriptionInput.Prompt = ""
 	issueDescriptionInput.SetValue(selectedItem.description)
 
 	mainFlexBox := stickers.NewFlexBox(0, 0)
@@ -239,24 +250,24 @@ func InitialModel(mergedPrs map[string]types.MergedPr, issues map[string]types.I
 		mainFlexBox.NewRow().AddCells(
 			[]*stickers.FlexBoxCell{
 				stickers.NewFlexBoxCell(1, 6),
-				stickers.NewFlexBoxCell(2, 6),
+				stickers.NewFlexBoxCell(1, 6),
 			},
 		),
 	}
 	mainFlexBox.AddRows(mainFlexBoxRows)
 
 	return model{
-		selected:              make(map[string]struct{}),
-		focusedView:           0,
-		issueList:             l,
-		keys:                  keys,
-		help:                  l.Help,
-		inputStyle:            lipgloss.NewStyle().Foreground(lipgloss.Color("#FF75B7")),
-		issues:                issues,
-		mergedPrs:             mergedPrs,
-		issueSummaryInput:     issueSummaryInput,
-		issueDescriptionInput: issueDescriptionInput,
-		mainFlexBox:           mainFlexBox,
+		selected:           make(map[string]struct{}),
+		focusedView:        0,
+		issueList:          l,
+		keys:               keys,
+		help:               l.Help,
+		issues:             issues,
+		mergedPrs:          mergedPrs,
+		issueSummaryTi:     issueSummaryInput,
+		issueDescriptionTa: issueDescriptionInput,
+		mainFlexBox:        mainFlexBox,
+		issueRepoName:      selectedItem.repoName,
 	}, nil
 }
 
@@ -278,34 +289,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		// If we set a width on the help menu it can it can gracefully truncate
 		// its view as needed.
-		m.help.Width = msg.Width
-		m.issueList.SetWidth(msg.Width)
+		m.issueDescriptionTa.SetWidth(msg.Width)
 		m.mainFlexBox.SetWidth(msg.Width)
 		m.mainFlexBox.SetHeight(msg.Height)
+		// ensure we can see help text
+		h, v := docStyle.GetFrameSize()
+		m.issueList.SetSize(msg.Width-h, msg.Height-v)
 		return m, nil
 
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, m.keys.Up, m.keys.Down):
-			// for some reason .Index() returns the previous or future index depending on the direction
-			idx := m.issueList.Index()
+			if m.focusedView == issueListView {
+				// for some reason .Index() returns the previous or future index depending on the direction
+				idx := m.issueList.Index()
 
-			if key.Matches(msg, m.keys.Up) {
-				idx = idx - 1
-				if idx < 0 {
-					idx = 0
+				if key.Matches(msg, m.keys.Up) {
+					idx = idx - 1
+					if idx < 0 {
+						idx = 0
+					}
+				} else {
+					idx = idx + 1
+					if idx > len(m.issueList.Items())-1 {
+						idx = len(m.issueList.Items()) - 1
+					}
 				}
-			} else {
-				idx = idx + 1
-				if idx > len(m.issueList.Items())-1 {
-					idx = len(m.issueList.Items()) - 1
-				}
-			}
 
-			selectedItem, ok := m.issueList.Items()[idx].(issueItem)
-			if ok {
-				m.issueSummaryInput.SetValue(selectedItem.summary)
-				m.issueDescriptionInput.SetValue(selectedItem.description)
+				selectedItem, ok := m.issueList.Items()[idx].(issueItem)
+				if ok {
+					m.issueRepoName = selectedItem.repoName
+					m.issueSummaryTi.SetValue(selectedItem.summary)
+					m.issueDescriptionTa.SetValue(selectedItem.description)
+				}
 			}
 
 		case key.Matches(msg, m.keys.Enter):
@@ -342,11 +358,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, newListCmd)
 	}
 
-	newSummaryInputModel, newSummaryInputCmd := m.issueSummaryInput.Update(msg)
-	m.issueSummaryInput = newSummaryInputModel
+	newSummaryInputModel, newSummaryInputCmd := m.issueSummaryTi.Update(msg)
+	m.issueSummaryTi = newSummaryInputModel
 
-	newDescriptionInputModel, newDescriptionInputCmd := m.issueDescriptionInput.Update(msg)
-	m.issueDescriptionInput = newDescriptionInputModel
+	newDescriptionInputModel, newDescriptionInputCmd := m.issueDescriptionTa.Update(msg)
+	m.issueDescriptionTa = newDescriptionInputModel
 
 	cmds = append(cmds, newSummaryInputCmd, newDescriptionInputCmd)
 	return m, tea.Batch(cmds...)
@@ -364,13 +380,14 @@ func (m model) View() string {
 		return "Unable to get main row"
 	}
 
-	issueEditorCellView := fmt.Sprintf("%s\n\n\n%s", m.issueSummaryInput.View(), m.issueDescriptionInput.View())
+	repositoryString := repoNameStyle.Render(fmt.Sprintf("Repository: %s", m.issueRepoName))
+	issueEditorCellView := fmt.Sprintf("%s\n%s\n\n\n Description:\n%s", repositoryString, m.issueSummaryTi.View(), m.issueDescriptionTa.View())
 	switch m.focusedView {
 	case issueListView:
-		mainFlexBoxRow.Cell(issueListCell).SetStyle(focusedModelStyle).SetContent(m.issueList.View())
+		mainFlexBoxRow.Cell(issueListCell).SetStyle(focusedModelStyle).SetContent(docStyle.Render(m.issueList.View()))
 		mainFlexBoxRow.Cell(issueEditorCell).SetStyle(modelStyle).SetContent(issueEditorCellView)
 	case issueSummaryInputView, issueDescriptionInputView:
-		mainFlexBoxRow.Cell(issueListCell).SetStyle(modelStyle).SetContent(m.issueList.View())
+		mainFlexBoxRow.Cell(issueListCell).SetStyle(modelStyle).SetContent(docStyle.Render(m.issueList.View()))
 		mainFlexBoxRow.Cell(issueEditorCell).SetStyle(focusedModelStyle).SetContent(issueEditorCellView)
 	}
 
@@ -387,8 +404,8 @@ func (m *model) nextView() {
 		if selectedItem != nil {
 			issue, ok := selectedItem.(issueItem)
 			if ok {
-				issue.summary = m.issueSummaryInput.Value()
-				issue.description = m.issueDescriptionInput.Value()
+				issue.summary = m.issueSummaryTi.Value()
+				issue.description = m.issueDescriptionTa.Value()
 				m.issueList.SetItem(m.issueList.Index(), issue)
 			}
 		}
@@ -396,13 +413,13 @@ func (m *model) nextView() {
 
 	switch m.focusedView {
 	case issueListView:
-		m.issueSummaryInput.Blur()
-		m.issueDescriptionInput.Blur()
+		m.issueSummaryTi.Blur()
+		m.issueDescriptionTa.Blur()
 	case issueSummaryInputView:
-		m.issueSummaryInput.Focus()
-		m.issueDescriptionInput.Blur()
+		m.issueSummaryTi.Focus()
+		m.issueDescriptionTa.Blur()
 	case issueDescriptionInputView:
-		m.issueSummaryInput.Blur()
-		m.issueDescriptionInput.Focus()
+		m.issueSummaryTi.Blur()
+		m.issueDescriptionTa.Focus()
 	}
 }
